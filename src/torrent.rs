@@ -3,23 +3,24 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::Path;
 
-// Define a single error enum that can represent all potential errors:
-// reading the file (Io) or decoding the content (Bencode).
+const SHA1_SIZE: usize = 20;
+
 #[derive(Debug)]
-pub enum TorrentError {
+pub enum BencodeTorrentError {
     Io(std::io::Error),
-    Bencode(serde_bencode::Error),
+    Parsing(serde_bencode::Error),
+    InvalidMetadata(String),
 }
 
-impl From<std::io::Error> for TorrentError {
+impl From<std::io::Error> for BencodeTorrentError {
     fn from(error: std::io::Error) -> Self {
-        TorrentError::Io(error)
+        BencodeTorrentError::Io(error)
     }
 }
 
-impl From<serde_bencode::Error> for TorrentError {
+impl From<serde_bencode::Error> for BencodeTorrentError {
     fn from(error: serde_bencode::Error) -> Self {
-        TorrentError::Bencode(error)
+        BencodeTorrentError::Parsing(error)
     }
 }
 
@@ -27,49 +28,46 @@ impl From<serde_bencode::Error> for TorrentError {
 // The `#[serde(rename = ...)]` attribute is used because Bencode keys
 // can contain spaces, which are not valid in Rust identifiers.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct BencodeInfo {
-    pub name: String,
+struct BencodeInfo {
+    name: String,
 
+    // The length of each piece.
     #[serde(rename = "piece length")]
-    pub piece_length: u64,
+    piece_length: u64,
 
+    // This is a single byte vector containing all concatenated 20-byte SHA-1 hashes.
     #[serde(with = "serde_bytes")]
-    pub pieces: Vec<u8>,
+    pieces: Vec<u8>,
 
     // The 'length' key is for single-file torrents.
     // The 'files' key is for multi-file torrents.
     // `Option` marks them as optional, since only one can exist.
-    pub length: Option<u64>,
-    pub files: Option<Vec<MultiFile>>,
+    length: Option<u64>,
+    files: Option<Vec<MultiFile>>,
 }
 
-// Represents a file in a multi-file torrent.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct MultiFile {
-    pub length: u64,
-    pub path: Vec<String>,
-}
+impl BencodeInfo {
+    /// Splits the concatenated `pieces` byte vector into a vector of individual
+    /// 20-byte SHA-1 hashes.
+    ///
+    /// Returns an error if the total length is not an exact multiple of 20.
+    fn piece_hashes(&self) -> Result<Vec<[u8; SHA1_SIZE]>, BencodeTorrentError> {
+        if self.pieces.len() % SHA1_SIZE != 0 {
+            return Err(BencodeTorrentError::InvalidMetadata(
+                "The length of the 'pieces' field is not a multiple of 20 bytes.".to_string(),
+            ));
+        }
 
-// Represents the top-level structure of the .torrent file.
-#[derive(Debug, Deserialize)]
-pub struct Torrent {
-    pub announce: String,
-    pub info: BencodeInfo,
+        let (hash_slices, _remainder) = self.pieces.as_chunks::<SHA1_SIZE>();
+        let hashes = hash_slices.iter().copied().collect();
 
-    // Optional fields
-    #[serde(rename = "creation date")]
-    creation_date: Option<u64>,
-    comment: Option<String>,
-    #[serde(rename = "created by")]
-    created_by: Option<String>,
-}
+        Ok(hashes)
+    }
 
-// We need an additional method on Torrent to generate the info hash.
-impl Torrent {
     /// Calculates the SHA-1 hash of the bencoded `info` dictionary.
     /// This hash is the unique identifier for the torrent.
-    pub fn info_hash(&self) -> Result<[u8; 20], TorrentError> {
-        let info_bencoded_bytes = serde_bencode::to_bytes(&self.info)?;
+    fn info_hash(&self) -> Result<[u8; SHA1_SIZE], BencodeTorrentError> {
+        let info_bencoded_bytes = serde_bencode::to_bytes(&self)?;
         let mut hasher = Sha1::new();
         hasher.update(&info_bencoded_bytes);
 
@@ -77,16 +75,73 @@ impl Torrent {
         // `GenericArray<u8, U>` which can be converted to the fixed-size array `[u8; 20]`.
         let hash_result = hasher.finalize();
 
-        // The Sha1 hash is 20 bytes long.
-        let mut info_hash = [0u8; 20];
+        let mut info_hash = [0u8; SHA1_SIZE];
         info_hash.copy_from_slice(&hash_result[..]);
 
         Ok(info_hash)
     }
+
+    /// Calculates the total size of the torrent date in bytes.
+    /// Handles both single-file and multi-file torrent structures.
+    fn total_size(&self) -> Result<u64, BencodeTorrentError> {
+        if let Some(length) = self.length {
+            return Ok(length);
+        }
+
+        if let Some(files) = &self.files {
+            let total: u64 = files.iter().map(|f| f.length).sum();
+            return Ok(total);
+        }
+
+        return Err(BencodeTorrentError::InvalidMetadata(
+            "Torrent info dictionary is missing both 'length' and 'files' keys.".to_string(),
+        ));
+    }
 }
 
-pub fn open(torrent_path: &Path) -> Result<Torrent, TorrentError> {
+#[derive(Debug, Deserialize, Serialize)]
+struct MultiFile {
+    pub length: u64,
+    pub path: Vec<String>,
+}
+
+// Represents the top-level structure of the .torrent file.
+#[derive(Debug, Deserialize)]
+struct BencodeTorrent {
+    pub announce: String,
+    pub info: BencodeInfo,
+    // Optional fields
+    #[serde(rename = "creation date")]
+    _creation_date: Option<u64>,
+    _comment: Option<String>,
+    #[serde(rename = "created by")]
+    _created_by: Option<String>,
+}
+
+pub struct VerifiedTorrent {
+    pub announce: String,
+    pub info_hash: [u8; SHA1_SIZE],
+    pub name: String,
+    pub piece_length: u64,
+    pub piece_hashes: Vec<[u8; SHA1_SIZE]>,
+    pub total_size: u64,
+}
+
+pub fn open(torrent_path: &Path) -> Result<VerifiedTorrent, BencodeTorrentError> {
     let torrent_bytes = fs::read(torrent_path)?;
-    let torrent: Torrent = serde_bencode::from_bytes(&torrent_bytes)?;
-    return Ok(torrent);
+    let torrent: BencodeTorrent = serde_bencode::from_bytes(&torrent_bytes)?;
+    let info_hash = torrent.info.info_hash()?;
+    let piece_hashes = torrent.info.piece_hashes()?;
+    let total_size = torrent.info.total_size()?;
+
+    let verified_torrent: VerifiedTorrent = VerifiedTorrent {
+        announce: torrent.announce,
+        info_hash: info_hash,
+        name: torrent.info.name,
+        piece_length: torrent.info.piece_length,
+        piece_hashes: piece_hashes,
+        total_size: total_size,
+    };
+
+    return Ok(verified_torrent);
 }
