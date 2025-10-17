@@ -52,14 +52,14 @@ impl BencodeInfo {
     ///
     /// Returns an error if the total length is not an exact multiple of 20.
     fn piece_hashes(&self) -> Result<Vec<[u8; SHA1_SIZE]>, BencodeTorrentError> {
-        if self.pieces.len() % SHA1_SIZE != 0 {
+        if !self.pieces.len().is_multiple_of(SHA1_SIZE) {
             return Err(BencodeTorrentError::InvalidMetadata(
                 "The length of the 'pieces' field is not a multiple of 20 bytes.".to_string(),
             ));
         }
 
         let (hash_slices, _remainder) = self.pieces.as_chunks::<SHA1_SIZE>();
-        let hashes = hash_slices.iter().copied().collect();
+        let hashes = hash_slices.to_vec();
 
         Ok(hashes)
     }
@@ -93,9 +93,9 @@ impl BencodeInfo {
             return Ok(total);
         }
 
-        return Err(BencodeTorrentError::InvalidMetadata(
+        Err(BencodeTorrentError::InvalidMetadata(
             "Torrent info dictionary is missing both 'length' and 'files' keys.".to_string(),
-        ));
+        ))
     }
 }
 
@@ -136,12 +136,12 @@ pub fn open(torrent_path: &Path) -> Result<VerifiedTorrent, BencodeTorrentError>
 
     let verified_torrent: VerifiedTorrent = VerifiedTorrent {
         announce: torrent.announce,
-        info_hash: info_hash,
+        info_hash,
         name: torrent.info.name,
         piece_length: torrent.info.piece_length,
-        piece_hashes: piece_hashes,
-        total_size: total_size,
+        piece_hashes,
+        total_size,
     };
 
-    return Ok(verified_torrent);
+    Ok(verified_torrent)
 }

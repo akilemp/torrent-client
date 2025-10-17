@@ -10,7 +10,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn _socket_addr(&self) -> SocketAddrV4 {
+    pub fn socket_addr(&self) -> SocketAddrV4 {
         SocketAddrV4::new(self.ip, self.port)
     }
 }
@@ -26,7 +26,7 @@ pub fn generate_peer_id() -> [u8; 20] {
 
 /// Parses the compact 6-byte peer list string.
 pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<Peer>, io::Error> {
-    if bytes.len() % 6 != 0 {
+    if !bytes.len().is_multiple_of(6) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Compact peer list length is not a multiple of 6",
@@ -34,9 +34,9 @@ pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<Peer>, io::Error> {
     }
 
     let mut peers = Vec::new();
-    let mut chunks = bytes.chunks_exact(6);
+    let chunks = bytes.chunks_exact(6);
 
-    while let Some(chunk) = chunks.next() {
+    for chunk in chunks {
         // Bytes 0-3 are the IP address
         let ip_bytes: [u8; 4] = chunk[0..4].try_into().unwrap();
         let ip = Ipv4Addr::from(ip_bytes);
@@ -47,7 +47,7 @@ pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<Peer>, io::Error> {
         // Convert big-endian bytes to a u16
         let port = u16::from_be_bytes(port_bytes);
 
-        peers.push(Peer { ip: ip, port: port });
+        peers.push(Peer { ip, port });
     }
 
     Ok(peers)
