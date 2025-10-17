@@ -22,12 +22,24 @@ fn main() {
             println!("   Number of Pieces: {}", num_pieces);
             println!("   Torrent info hash: {}", hex::encode(info_hash));
             println!("");
+            println!("Requesting Peers");
             let peer_id = peer::generate_peer_id();
             println!("   Generated peer id: {}", hex::encode(peer_id));
             println!(
                 "   Tracker URL: {}",
                 tracker::build_tracker_url(&torrent, &peer_id)
             );
+            println!("   Requesting Peers:");
+            match tracker::get_peers(&torrent, &peer_id) {
+                Ok(peers) => {
+                    println!("   Peers: {:?}", peers);
+                }
+                Err(e) => match e {
+                    tracker::TrackerError::HttpClient(error) => println!("{}", error),
+                    tracker::TrackerError::BencodeDecode(error) => println!("{}", error),
+                    tracker::TrackerError::PeerParse(error) => println!("{}", error),
+                },
+            }
         }
         Err(e) => {
             eprintln!("\n❌ Failed to process torrent file.");

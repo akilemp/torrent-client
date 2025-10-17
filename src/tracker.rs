@@ -1,8 +1,36 @@
+use reqwest::blocking::Client;
 use serde::Deserialize;
 
+use crate::peer::{self, Peer};
 use crate::torrent::VerifiedTorrent;
 
+#[derive(Debug)]
+pub enum TrackerError {
+    HttpClient(reqwest::Error),
+    BencodeDecode(serde_bencode::Error),
+    PeerParse(std::io::Error),
+}
+
+impl From<reqwest::Error> for TrackerError {
+    fn from(e: reqwest::Error) -> Self {
+        TrackerError::HttpClient(e)
+    }
+}
+
+impl From<serde_bencode::Error> for TrackerError {
+    fn from(e: serde_bencode::Error) -> Self {
+        TrackerError::BencodeDecode(e)
+    }
+}
+
+impl From<std::io::Error> for TrackerError {
+    fn from(e: std::io::Error) -> Self {
+        TrackerError::PeerParse(e)
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct TrackerResponse {
     /// The interval in seconds to wait between requests.
     pub interval: i64,
@@ -18,7 +46,13 @@ pub struct TrackerResponse {
     /// The peers in the "compact" format (required by your URL: compact=1).
     /// This is a string of raw bytes where every 6 bytes represent one peer:
     /// 4 bytes for IP address (big-endian) + 2 bytes for port (big-endian).
+    #[serde(with = "serde_bytes")]
     pub peers: Vec<u8>,
+
+    // 💡 Optional IPv6 peers (18 bytes per peer)
+    #[serde(default)]
+    #[serde(with = "serde_bytes")]
+    pub peers6: Option<Vec<u8>>,
 }
 
 fn percent_encode_bytes(data: &[u8]) -> String {
@@ -53,6 +87,26 @@ pub fn build_tracker_url(torrent: &VerifiedTorrent, peer_id: &[u8; 20]) -> Strin
     );
 
     tracker_url
+}
+
+/// Fetches peers from the tracker and returns a list of Peer structs.
+pub fn get_peers(torrent: &VerifiedTorrent, peer_id: &[u8; 20]) -> Result<Vec<Peer>, TrackerError> {
+    let url = build_tracker_url(torrent, peer_id);
+
+    let client = Client::new();
+    let response = client.get(&url).send()?;
+
+    if !response.status().is_success() {
+        return Err(TrackerError::HttpClient(
+            response.error_for_status().unwrap_err(),
+        ));
+    }
+
+    let response_bytes = response.bytes()?;
+    let tracker_response: TrackerResponse = serde_bencode::from_bytes(&response_bytes)?;
+    let peers = peer::parse_compact_peers(&tracker_response.peers)?;
+
+    Ok(peers)
 }
 
 #[cfg(test)]
