@@ -1,6 +1,8 @@
 use std::path::Path;
 
+mod handshake;
 mod peer;
+mod peer_connection;
 mod torrent;
 mod tracker;
 
@@ -23,16 +25,25 @@ fn main() {
             println!("   Torrent info hash: {}", hex::encode(info_hash));
             println!("");
             println!("Requesting Peers");
-            let peer_id = peer::generate_peer_id();
-            println!("   Generated peer id: {}", hex::encode(peer_id));
+            let client_peer_id = peer::generate_peer_id();
+            println!("   Generated peer id: {}", hex::encode(client_peer_id));
             println!(
                 "   Tracker URL: {}",
-                tracker::build_tracker_url(&torrent, &peer_id)
+                tracker::build_tracker_url(&torrent, &client_peer_id)
             );
             println!("   Requesting Peers:");
-            match tracker::get_peers(&torrent, &peer_id) {
+            match tracker::get_peers(&torrent, &client_peer_id) {
                 Ok(peers) => {
                     println!("   Peers: {:?}", peers);
+                    println!("   Attempting a handshake with a Peer:");
+                    let conn =
+                        peer_connection::perform_handshake(&peers[0], info_hash, client_peer_id)
+                            .expect("FATAL: Handshake must succeed to continue.");
+
+                    println!(
+                        "   Successfully handshaked with a peer: {}",
+                        hex::encode(conn.peer_id)
+                    );
                 }
                 Err(e) => match e {
                     tracker::TrackerError::HttpClient(error) => println!("{}", error),

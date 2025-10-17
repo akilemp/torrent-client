@@ -10,7 +10,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn _socket_addr(&self) -> SocketAddrV4 {
+    pub fn socket_addr(&self) -> SocketAddrV4 {
         SocketAddrV4::new(self.ip, self.port)
     }
 }
