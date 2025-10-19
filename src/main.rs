@@ -1,5 +1,6 @@
 use std::path::Path;
 
+mod bitfield;
 mod handshake;
 mod message;
 mod peer;

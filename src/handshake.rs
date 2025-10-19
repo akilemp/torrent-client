@@ -26,7 +26,7 @@ impl Handshake {
             pstrlen: PSTR_LEN,
             pstr: *PSTR,
             reserved: [0; 8],
-            info_hash: info_hash,
+            info_hash,
             peer_id: client_peer_id,
         }
     }
