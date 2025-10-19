@@ -5,6 +5,7 @@ mod peer;
 mod peer_connection;
 mod torrent;
 mod tracker;
+mod message;
 
 fn main() {
     let path = Path::new("debian-13.1.0-amd64-netinst.iso.torrent");
