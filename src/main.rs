@@ -1,11 +1,11 @@
 use std::path::Path;
 
 mod handshake;
+mod message;
 mod peer;
 mod peer_connection;
 mod torrent;
 mod tracker;
-mod message;
 
 fn main() {
     let path = Path::new("debian-13.1.0-amd64-netinst.iso.torrent");
@@ -41,10 +41,7 @@ fn main() {
                         peer_connection::perform_handshake(&peers[0], info_hash, client_peer_id)
                             .expect("FATAL: Handshake must succeed to continue.");
 
-                    println!(
-                        "   Successfully handshaked with a peer: {}",
-                        hex::encode(conn.peer_id)
-                    );
+                    println!("   Successfully handshaked with a peer: {:?}", conn.peer_id);
                 }
                 Err(e) => match e {
                     tracker::TrackerError::HttpClient(error) => println!("{}", error),

@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -14,11 +13,10 @@ pub enum MessageError {
 impl fmt::Display for MessageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MessageError::InvalidLength => write!(f, "Invalid message length (too short)" ),
+            MessageError::InvalidLength => write!(f, "Invalid message length (too short)"),
             MessageError::IncompleteData => write!(f, "Not enogh data for declared length"),
             MessageError::InvalidMessageId(id) => write!(f, "Invalid message ID: {}", id),
         }
-
     }
 }
 
@@ -60,14 +58,14 @@ impl TryFrom<u8> for MessageId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     id: Option<MessageId>,
-    payload: Vec<u8>
+    payload: Vec<u8>,
 }
 
 impl Message {
-    pub fn to_bytes(&self) ->Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         match self.id {
             None => {
-                vec![0,0,0,0]
+                vec![0, 0, 0, 0]
             }
             Some(id) => {
                 let lenght = 1 + self.payload.len();
@@ -82,12 +80,10 @@ impl Message {
 
                 buf
             }
-
         }
-
     }
 
-    pub fn from_bytes(data: &[u8]) ->Result<Self, MessageError> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, MessageError> {
         if data.len() < 4 {
             return Err(MessageError::InvalidLength);
         }
@@ -95,7 +91,10 @@ impl Message {
         let msg_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
 
         if msg_len == 0 {
-            return Ok(Message { id: None, payload: Vec::new() })
+            return Ok(Message {
+                id: None,
+                payload: Vec::new(),
+            });
         }
 
         if data.len() != 4 + msg_len {
@@ -103,11 +102,13 @@ impl Message {
         }
 
         let id = MessageId::try_from(data[4])?;
-        let payload = data[5 .. ].to_vec();
+        let payload = data[5..].to_vec();
 
-        Ok(Message { id: Some(id), payload })
+        Ok(Message {
+            id: Some(id),
+            payload,
+        })
     }
-
 }
 
 // --- Tests ---
@@ -124,11 +125,14 @@ mod tests {
         };
 
         let bytes = msg.to_bytes();
-        assert_eq!(bytes, vec![
-            0, 0, 0, 5, // length = 5
-            4,          // MessageId::Have
-            0, 0, 0, 5  // payload
-        ]);
+        assert_eq!(
+            bytes,
+            vec![
+                0, 0, 0, 5, // length = 5
+                4, // MessageId::Have
+                0, 0, 0, 5 // payload
+            ]
+        );
 
         let parsed = Message::from_bytes(&bytes).unwrap();
         assert_eq!(parsed, msg);
