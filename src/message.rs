@@ -2,7 +2,7 @@
 
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 
 #[derive(Debug)]
 pub enum MessageError {
@@ -69,7 +69,7 @@ impl TryFrom<u8> for MessageId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub id: Option<MessageId>,
-    payload: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 impl Message {
@@ -113,12 +113,23 @@ impl Message {
         }
 
         let id = MessageId::try_from(data[4])?;
-        let payload = data[5..].to_vec();
 
-        Ok(Message {
-            id: Some(id),
-            payload,
-        })
+        let payload = match id {
+            // Messages without payload
+            MessageId::Choke
+            | MessageId::Unchoke
+            | MessageId::Interested
+            | MessageId::NotInterested => Vec::new(),
+
+            // Messages with payload
+            MessageId::Have
+            | MessageId::Bitfield
+            | MessageId::Request
+            | MessageId::Piece
+            | MessageId::Cancel => data[5..].to_vec(),
+        };
+
+        Ok(Message { id: Some(id), payload })
     }
 
     pub fn read_from_stream<R: Read>(reader: &mut R) -> Result<Self, MessageError> {
@@ -140,6 +151,12 @@ impl Message {
         full_msg.extend_from_slice(&msg_buf);
 
         Self::from_bytes(&full_msg)
+    }
+
+    pub fn write_to_stream<W: Write>(&self, writer: &mut W) -> Result<(), MessageError> {
+        let bytes = self.to_bytes();
+        writer.write_all(&bytes)?;
+        Ok(())
     }
 }
 
@@ -185,6 +202,37 @@ mod tests {
         assert_eq!(parsed, msg);
     }
 
+    mod message_parsing_tests {
+        use super::*;
+        #[test]
+        fn test_parse_choke_message() {
+            // 4-byte length = 1, id = 0 (Choke)
+            let data = [0, 0, 0, 1, 0];
+            let msg = Message::from_bytes(&data).unwrap();
+            assert_eq!(msg.id, Some(MessageId::Choke));
+            assert!(msg.payload.is_empty());
+        }
+
+        #[test]
+        fn test_parse_bitfield_message_with_payload() {
+            // 4-byte length = 3, id = 5 (Bitfield), payload = [0b10101010, 0b11000000]
+            let data = [0, 0, 0, 3, 5, 0b_1010_1010, 0b_1100_0000];
+            let msg = Message::from_bytes(&data).unwrap();
+            assert_eq!(msg.id, Some(MessageId::Bitfield));
+            assert_eq!(msg.payload, vec![0b_1010_1010, 0b_1100_0000]);
+        }
+
+        #[test]
+        fn test_parse_have_message_with_payload() {
+            // 4-byte length = 5, id = 4 (Have), payload = [0, 0, 0, 12]
+            let data = [0, 0, 0, 5, 4, 0, 0, 0, 12];
+            let msg = Message::from_bytes(&data).unwrap();
+            assert_eq!(msg.id, Some(MessageId::Have));
+            assert_eq!(msg.payload, vec![0, 0, 0, 12]);
+        }
+    }
+
+
     #[test]
     fn test_invalid_message_id() {
         let bytes = vec![0, 0, 0, 1, 99]; // 99 is invalid
@@ -222,5 +270,18 @@ mod tests {
 
         assert_eq!(message.id, Some(MessageId::Bitfield));
         assert_eq!(message.payload, payload);
+    }
+
+    #[test]
+    fn test_write_to_stream_keep_alive() {
+        let msg: Message = Message {
+            id: None,
+            payload: vec![],
+        };
+
+        let mut buf = Vec::new();
+        msg.write_to_stream(&mut buf).unwrap();
+
+        assert_eq!(buf, vec![0, 0, 0, 0]);
     }
 }
