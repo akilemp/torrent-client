@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use crate::message::Message;
-
 mod bitfield;
 mod handshake;
 mod message;
@@ -46,7 +44,8 @@ fn main() {
 
                     println!("   Successfully handshaked with a peer: {:?}", peers[0].ip);
                     println!("   Reading Bitfield");
-                    let msg = Message::read_from_stream(&mut conn.stream)
+                    let msg = conn
+                        .read_message()
                         .expect("FATAL: must get a message from peer");
                     println!("   Received message: {:?}", msg);
                 }

@@ -2,7 +2,7 @@
 
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 
 #[derive(Debug)]
 pub enum MessageError {
@@ -69,7 +69,7 @@ impl TryFrom<u8> for MessageId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub id: Option<MessageId>,
-    payload: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 impl Message {
@@ -140,6 +140,12 @@ impl Message {
         full_msg.extend_from_slice(&msg_buf);
 
         Self::from_bytes(&full_msg)
+    }
+
+    pub fn write_to_stream<W: Write>(&self, writer: &mut W) -> Result<(), MessageError> {
+        let bytes = self.to_bytes();
+        writer.write_all(&bytes)?;
+        Ok(())
     }
 }
 
@@ -222,5 +228,18 @@ mod tests {
 
         assert_eq!(message.id, Some(MessageId::Bitfield));
         assert_eq!(message.payload, payload);
+    }
+
+    #[test]
+    fn test_write_keep_alive_message() {
+        let msg: Message = Message {
+            id: None,
+            payload: vec![],
+        };
+
+        let mut buf = Vec::new();
+        msg.write_to_stream(&mut buf).unwrap();
+
+        assert_eq!(buf, vec![0, 0, 0, 0]);
     }
 }
