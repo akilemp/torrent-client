@@ -38,9 +38,9 @@ pub fn perform_handshake(
         .map_err(HandshakeError::Io)?;
 
     let outgoing_handshake = Handshake::new(info_hash, client_peer_id);
-    let handshake_bytes = outgoing_handshake.to_bytes();
+    let out_handshake_bytes = outgoing_handshake.to_bytes();
 
-    stream.write_all(&handshake_bytes)?;
+    stream.write_all(&out_handshake_bytes)?;
     println!("      Successfully sent Handshake to {}", addr);
 
     let mut response_buffer = [0u8; HANDSHAKE_LEN];

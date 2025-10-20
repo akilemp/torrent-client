@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::message::Message;
+
 mod bitfield;
 mod handshake;
 mod message;
@@ -36,13 +38,17 @@ fn main() {
             println!("   Requesting Peers:");
             match tracker::get_peers(&torrent, &client_peer_id) {
                 Ok(peers) => {
-                    println!("   Peers: {:?}", peers);
+                    println!("   Peers: {}", peers.len());
                     println!("   Attempting a handshake with a Peer:");
-                    let conn =
+                    let mut conn =
                         peer_connection::perform_handshake(&peers[0], info_hash, client_peer_id)
                             .expect("FATAL: Handshake must succeed to continue.");
 
-                    println!("   Successfully handshaked with a peer: {:?}", conn.peer_id);
+                    println!("   Successfully handshaked with a peer: {:?}", peers[0].ip);
+                    println!("   Reading Bitfield");
+                    let msg = Message::read_from_stream(&mut conn.stream)
+                        .expect("FATAL: must get a message from peer");
+                    println!("   Received message: {:?}", msg);
                 }
                 Err(e) => match e {
                     tracker::TrackerError::HttpClient(error) => println!("{}", error),
