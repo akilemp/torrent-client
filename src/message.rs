@@ -10,6 +10,7 @@ pub enum MessageError {
     IncompleteData,
     InvalidMessageId(u8),
     IoError(std::io::Error),
+    InvalidPayload,
 }
 
 impl From<std::io::Error> for MessageError {
@@ -26,6 +27,9 @@ impl fmt::Display for MessageError {
             MessageError::InvalidMessageId(id) => write!(f, "Invalid message ID: {}", id),
             MessageError::IoError(e) => {
                 write!(f, "Error while reading message from TcpStream: {}", e)
+            }
+            MessageError::InvalidPayload => {
+                write!(f, "Invalid payload (too short)")
             }
         }
     }
@@ -129,7 +133,10 @@ impl Message {
             | MessageId::Cancel => data[5..].to_vec(),
         };
 
-        Ok(Message { id: Some(id), payload })
+        Ok(Message {
+            id: Some(id),
+            payload,
+        })
     }
 
     pub fn read_from_stream<R: Read>(reader: &mut R) -> Result<Self, MessageError> {
@@ -157,6 +164,37 @@ impl Message {
         let bytes = self.to_bytes();
         writer.write_all(&bytes)?;
         Ok(())
+    }
+
+    pub fn interested() -> Message {
+        Message {
+            id: Some(MessageId::Interested),
+            payload: Vec::new(),
+        }
+    }
+
+    pub fn request(index: u32, begin: u32, length: u32) -> Message {
+        let id = MessageId::Request;
+        let mut payload = Vec::with_capacity(12);
+        payload.extend_from_slice(&index.to_be_bytes());
+        payload.extend_from_slice(&begin.to_be_bytes());
+        payload.extend_from_slice(&length.to_be_bytes());
+        Message {
+            id: Some(id),
+            payload,
+        }
+    }
+
+    pub fn parse_piece_payload(payload: &[u8]) -> Result<(u32, u32, Vec<u8>), MessageError> {
+        if payload.len() < 8 {
+            return Err(MessageError::InvalidPayload);
+        }
+
+        let index = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+        let begin = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+        let block = payload[8..].to_vec();
+
+        Ok((index, begin, block))
     }
 }
 
@@ -231,7 +269,6 @@ mod tests {
             assert_eq!(msg.payload, vec![0, 0, 0, 12]);
         }
     }
-
 
     #[test]
     fn test_invalid_message_id() {

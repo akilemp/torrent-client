@@ -1,10 +1,12 @@
 use std::path::Path;
 
 mod bitfield;
+mod downloader;
 mod handshake;
 mod message;
 mod peer;
 mod peer_connection;
+mod piece_proggress;
 mod torrent;
 mod tracker;
 

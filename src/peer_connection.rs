@@ -14,11 +14,19 @@ pub struct PeerConnection<S: Read + Write> {
 }
 
 impl<S: Read + Write> PeerConnection<S> {
+    pub fn _new(stream: S, peer_id: [u8; 20]) -> Self {
+        Self {
+            stream,
+            peer_id,
+            is_choked: true,
+        }
+    }
+
     pub fn read_message(&mut self) -> Result<Message, MessageError> {
         Message::read_from_stream(&mut self.stream)
     }
 
-    pub fn _send_message(&mut self, msg: Message) -> Result<(), MessageError> {
+    pub fn write_message(&mut self, msg: &Message) -> Result<(), MessageError> {
         msg.write_to_stream(&mut self.stream)
     }
 }
