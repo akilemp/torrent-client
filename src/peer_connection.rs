@@ -27,6 +27,7 @@ impl<S: Read + Write> PeerConnection<S> {
     }
 
     pub fn write_message(&mut self, msg: &Message) -> Result<(), MessageError> {
+
         msg.write_to_stream(&mut self.stream)
     }
 }
