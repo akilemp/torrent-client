@@ -3,7 +3,6 @@
 use std::io::{Read, Write};
 
 use crate::piece_proggress::PieceProgress;
-
 use crate::bitfield::Bitfield;
 use crate::message::{Message, MessageError, MessageId};
 use crate::peer_connection::PeerConnection;
@@ -51,6 +50,7 @@ impl<S: Read + Write> Downloader<S> {
             return Err(DownloadError::PieceNotAvailable);
         }
 
+        // TODO move outside piece download
         self.conn.write_message(&Message::interested())?;
         self.wait_for_unchoke()?;
 
@@ -75,6 +75,8 @@ impl<S: Read + Write> Downloader<S> {
         if !self.verify_piece(piece_index, &progress.data) {
             return Err(DownloadError::InvalidHash);
         }
+        // TODO send to all connected peers
+        self.conn.write_message(&Message::have(piece_index))?;
 
         Ok(progress.data)
     }
@@ -182,7 +184,6 @@ mod tests {
             conn,
             torrent,
             peer_bitfield: bitfield,
-            // Set peer bitfield, etc.
         };
 
         let result = downloader.download_piece(0);

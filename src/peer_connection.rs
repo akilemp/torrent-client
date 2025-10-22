@@ -27,51 +27,49 @@ impl<S: Read + Write> PeerConnection<S> {
     }
 
     pub fn write_message(&mut self, msg: &Message) -> Result<(), MessageError> {
-
         msg.write_to_stream(&mut self.stream)
+    }
+
+    /// Establishes a TCP connection, performs the Handshake, and validates the response.
+    ///
+    /// # Arguments
+    /// * `peer`: The address (IP and Port) of the target peer.
+    /// * `info_hash`: The 20-byte hash of the torrent being downloaded.
+    /// * `client_peer_id`: Your client's 20-byte ID.
+    pub fn connect(
+        peer: &crate::peer::Peer,
+        info_hash: [u8; 20],
+        client_peer_id: [u8; 20],
+    ) -> Result<PeerConnection<TcpStream>, HandshakeError> {
+        let addr: SocketAddr = std::net::SocketAddr::V4(peer.socket_addr());
+
+        println!("      Connecting to peer: {}", addr);
+
+        let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(HandshakeError::Io)?;
+
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+
+        let outgoing_handshake = Handshake::new(info_hash, client_peer_id);
+        let out_handshake_bytes = outgoing_handshake.to_bytes();
+
+        stream.write_all(&out_handshake_bytes)?;
+
+        let mut response_buffer = [0u8; HANDSHAKE_LEN];
+        stream.read_exact(&mut response_buffer)?;
+
+        let incoming_handshake = Handshake::from_bytes(response_buffer, info_hash)?;
+
+        Ok(PeerConnection {
+            stream,
+            peer_id: incoming_handshake.peer_id,
+            is_choked: true,
+        })
     }
 }
 
-/// Establishes a TCP connection, performs the Handshake, and validates the response.
-///
-/// # Arguments
-/// * `peer`: The address (IP and Port) of the target peer.
-/// * `info_hash`: The 20-byte hash of the torrent being downloaded.
-/// * `client_peer_id`: Your client's 20-byte ID.
-pub fn perform_handshake(
-    peer: &crate::peer::Peer,
-    info_hash: [u8; 20],
-    client_peer_id: [u8; 20],
-) -> Result<PeerConnection<TcpStream>, HandshakeError> {
-    let addr: SocketAddr = std::net::SocketAddr::V4(peer.socket_addr());
 
-    println!("      Connecting to peer: {}", addr);
-
-    let mut stream =
-        TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(HandshakeError::Io)?;
-
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-
-    let outgoing_handshake = Handshake::new(info_hash, client_peer_id);
-    let out_handshake_bytes = outgoing_handshake.to_bytes();
-
-    stream.write_all(&out_handshake_bytes)?;
-    println!("      Successfully sent Handshake to {}", addr);
-
-    let mut response_buffer = [0u8; HANDSHAKE_LEN];
-    stream.read_exact(&mut response_buffer)?;
-    println!("      Successfully received Handshake from {}", addr);
-
-    let incoming_handshake = Handshake::from_bytes(response_buffer, info_hash)?;
-
-    println!("      Validated received Handshake");
-    Ok(PeerConnection {
-        stream,
-        peer_id: incoming_handshake.peer_id,
-        is_choked: true,
-    })
-}
 
 #[cfg(test)]
 mod tests {

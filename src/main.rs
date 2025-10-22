@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::{net::TcpStream, path::Path};
+
+use crate::peer_connection::PeerConnection;
 
 mod bitfield;
 mod downloader;
@@ -41,7 +43,7 @@ fn main() {
                     println!("   Peers: {}", peers.len());
                     println!("   Attempting a handshake with a Peer:");
                     let mut conn =
-                        peer_connection::perform_handshake(&peers[0], info_hash, client_peer_id)
+                        PeerConnection::<TcpStream>::connect(&peers[0], info_hash, client_peer_id)
                             .expect("FATAL: Handshake must succeed to continue.");
 
                     println!("   Successfully handshaked with a peer: {:?}", peers[0].ip);
