@@ -14,12 +14,12 @@ impl PieceProgress {
     pub const BLOCK_SIZE: usize = 16 * 1024;
     pub const MAX_PIPELINE: usize = 5;
 
-    pub fn new(index: u32, total_length: usize, block_size: usize) -> Self {
-        let num_blocks = total_length.div_ceil(block_size);
+    pub fn new(index: u32, total_length: usize) -> Self {
+        let num_blocks = total_length.div_ceil(PieceProgress::BLOCK_SIZE);
         Self {
             index,
             total_length,
-            block_size,
+            block_size: PieceProgress::BLOCK_SIZE,
             data: vec![0u8; total_length],
             received_blocks: vec![false; num_blocks],
             requested_blocks: vec![false; num_blocks],
@@ -61,6 +61,14 @@ impl PieceProgress {
         }
 
         requests
+    }
+
+    pub fn verify(&self, expected_hash: &[u8]) -> bool {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(&self.data);
+        let result: [u8; 20] = hasher.finalize().into();
+        result.as_ref() == expected_hash
     }
 }
 

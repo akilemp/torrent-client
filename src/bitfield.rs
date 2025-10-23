@@ -5,6 +5,7 @@ pub enum BitfieldError {
     InvalidLength,
 }
 
+#[derive(Debug)]
 pub struct Bitfield {
     bits: Vec<u8>,
     piece_count: usize,

@@ -127,6 +127,19 @@ pub struct VerifiedTorrent {
     pub total_size: u64,
 }
 
+impl VerifiedTorrent {
+    pub fn piece_length(&self, index: usize) -> usize {
+        let full_piece_len = self.piece_length as usize;
+        if index == self.piece_hashes.len() - 1 {
+            let remainder = (self.total_size as usize) % full_piece_len;
+            if remainder != 0 {
+                return remainder;
+            }
+        }
+        full_piece_len
+    }
+}
+
 pub fn open(torrent_path: &Path) -> Result<VerifiedTorrent, BencodeTorrentError> {
     let torrent_bytes = fs::read(torrent_path)?;
     let torrent: BencodeTorrent = serde_bencode::from_bytes(&torrent_bytes)?;

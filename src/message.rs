@@ -2,7 +2,6 @@
 
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{Read, Write};
 
 #[derive(Debug)]
 pub enum MessageError {
@@ -139,38 +138,15 @@ impl Message {
         })
     }
 
-    pub fn read_from_stream<R: Read>(reader: &mut R) -> Result<Self, MessageError> {
-        let mut len_buf = [0u8; 4];
-        reader.read_exact(&mut len_buf)?;
-        let msg_len = u32::from_be_bytes(len_buf) as usize;
-
-        if msg_len == 0 {
-            return Ok(Message {
-                id: None,
-                payload: Vec::new(),
-            });
-        }
-
-        let mut msg_buf = vec![0u8; msg_len];
-        reader.read_exact(&mut msg_buf)?;
-
-        let mut full_msg = len_buf.to_vec();
-        full_msg.extend_from_slice(&msg_buf);
-
-        Self::from_bytes(&full_msg)
-    }
-
-    pub fn write_to_stream<W: Write>(&self, writer: &mut W) -> Result<(), MessageError> {
-        let bytes = self.to_bytes();
-        writer.write_all(&bytes)?;
-        Ok(())
-    }
-
     pub fn interested() -> Message {
         Message {
             id: Some(MessageId::Interested),
             payload: Vec::new(),
         }
+    }
+
+    pub fn keep_alive() -> Message {
+        Message { id: None, payload: vec![] }
     }
 
     pub fn request(index: u32, begin: u32, length: u32) -> Message {
@@ -209,7 +185,6 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     #[test]
     fn test_serialize_have_message() {
@@ -297,34 +272,5 @@ mod tests {
         let bytes = vec![0, 0, 0, 5, 4]; // length 5, but only 1 byte after header
         let result = Message::from_bytes(&bytes);
         assert!(matches!(result, Err(MessageError::IncompleteData)));
-    }
-
-    #[test]
-    fn test_read_from_stream_bitfield() {
-        let payload = vec![0b10101010, 0b11000000];
-        let msg: Message = Message {
-            id: Some(MessageId::Bitfield),
-            payload: payload.clone(),
-        };
-        let buffer = Message::to_bytes(&msg);
-        let mut cursor = Cursor::new(buffer);
-
-        let message = Message::read_from_stream(&mut cursor).expect("should parse correctly");
-
-        assert_eq!(message.id, Some(MessageId::Bitfield));
-        assert_eq!(message.payload, payload);
-    }
-
-    #[test]
-    fn test_write_to_stream_keep_alive() {
-        let msg: Message = Message {
-            id: None,
-            payload: vec![],
-        };
-
-        let mut buf = Vec::new();
-        msg.write_to_stream(&mut buf).unwrap();
-
-        assert_eq!(buf, vec![0, 0, 0, 0]);
     }
 }
