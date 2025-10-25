@@ -169,7 +169,7 @@ impl Message {
         let payload = piece_index.to_be_bytes().to_vec();
         Message {
             id: Some(id),
-            payload: payload,
+            payload,
         }
     }
 

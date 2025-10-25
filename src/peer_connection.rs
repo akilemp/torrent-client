@@ -104,7 +104,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         let mut full_msg = len_buf.to_vec();
         full_msg.extend_from_slice(&msg_buf);
 
-        Ok(Message::from_bytes(&full_msg)?)
+        Message::from_bytes(&full_msg)
     }
 
     pub async fn write_message(&mut self, msg: &Message) -> Result<(), MessageError> {
@@ -138,7 +138,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         let mut conn = PeerConnection::new(stream);
 
         conn.write_message(&Message::interested()).await?;
-        conn.write_message(&Message { id: Some(MessageId::Unchoke), payload: vec![] }).await?;
+        conn.write_message(&Message {
+            id: Some(MessageId::Unchoke),
+            payload: vec![],
+        })
+        .await?;
 
         Ok(conn)
     }
@@ -221,7 +225,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
             return Err(ConnectionError::PieceNotAvailable);
         }
 
-
         // Step 2. Download piece blocks
         let piece_len = torrent.piece_length(piece_index as usize);
         let mut progress = PieceProgress::new(piece_index, piece_len);
@@ -243,15 +246,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
                     if index == piece_index {
                         progress.mark_block(begin as usize, &block);
                     }
-                },
+                }
                 Some(MessageId::Choke) => {
                     self.is_choked = true;
-                },
+                }
                 Some(MessageId::Unchoke) => {
                     self.is_choked = false;
-                },
-                Some(_other) => return Err(ConnectionError::Protocol("Didnt get a piece".into()))
-                ,
+                }
+                Some(_other) => return Err(ConnectionError::Protocol("Didnt get a piece".into())),
                 None => continue,
             }
         }
@@ -263,7 +265,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         }
 
         // Step 4. Notify peer we have the piece
-        let _ = self.write_message(&Message::have(piece_index)).await?;
+        self.write_message(&Message::have(piece_index)).await?;
         Ok(progress.data)
     }
 

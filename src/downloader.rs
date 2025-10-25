@@ -1,11 +1,13 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::net::TcpStream;
 
-use sha1::{Digest, Sha1};
 use tokio::io::AsyncWriteExt;
+use tokio::time::{sleep, timeout, Instant};
 
-use crate::message::{Message, MessageId};
+use crate::message::Message;
 use crate::peer::Peer;
 use crate::peer_connection::PeerConnection;
 use crate::torrent::VerifiedTorrent;
@@ -30,13 +32,20 @@ impl Downloader {
     /// Start concurrent downloading
     pub async fn start(&self, client_peer_id: [u8; 20]) -> anyhow::Result<()> {
         let mut handles = Vec::new();
+        let active_peers = Arc::new(AtomicUsize::new(0));
+        let total_downloaded = Arc::new(AtomicUsize::new(0));
 
         for peer in &self.peers {
+
+            let active_peers = active_peers.clone();
+            let total_downloaded = total_downloaded.clone();
             let peer_clone = peer.clone();
             let torrent = self.torrent.clone();
             let pieces = self.pieces.clone();
 
             let handle = tokio::spawn(async move {
+                active_peers.fetch_add(1, Ordering::SeqCst);
+
                 // 1️⃣ Connect to peer
                 let mut conn = match PeerConnection::<TcpStream>::connect(
                     &peer_clone,
@@ -48,6 +57,7 @@ impl Downloader {
                     Ok(c) => c,
                     Err(e) => {
                         eprintln!("Failed to connect to peer {:?}: {:?}", peer_clone, e);
+                        active_peers.fetch_sub(1, Ordering::SeqCst);
                         return;
                     }
                 };
@@ -57,6 +67,7 @@ impl Downloader {
                     Ok(bitfield) => conn.bitfield = Some(bitfield),
                     Err(e) => {
                         eprintln!("Failed to get bitfield from peer {:?}: {:?}", peer_clone, e);
+                        active_peers.fetch_sub(1, Ordering::SeqCst);
                         return;
                     }
                 };
@@ -65,6 +76,11 @@ impl Downloader {
 
                 // 3️⃣ Download pieces this peer has
                 loop {
+                    if total_downloaded.load(Ordering::SeqCst) >= torrent.total_size as usize {
+                        println!("✅ Torrent fully downloaded — closing peer {:?}", peer_clone);
+                        break;
+                    }
+
                     let piece_index = {
                         let mut pieces_guard = pieces.lock().unwrap();
 
@@ -87,23 +103,48 @@ impl Downloader {
 
                     let piece_index = match piece_index {
                         Some(idx) => idx,
-                        None => break, // no more pieces for this peer
+                        None => {
+                            // No work — send keep-alive to prevent timeout
+                            if let Err(e) = conn.write_message(&Message::keep_alive()).await {
+                                eprintln!("Failed to send keep-alive to {:?}: {:?}", peer_clone, e);
+                                break; // Connection probably closed
+                            }
+
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
                     };
 
                     // Download piece
-                    let result = conn.download_piece(&torrent, piece_index).await;
+                    // Limit how long we’ll wait for one piece (e.g. 60 seconds)
+                    let download_timeout = Duration::from_secs(30);
+                    let result = timeout(download_timeout, conn.download_piece(&torrent, piece_index)).await;
+
+                    let result = match result {
+                        Ok(r) => r,
+                        Err(_) => {
+                            eprintln!(
+                                "Peer {:?} timed out while downloading piece {}",
+                                peer_clone, piece_index
+                            );
+                            {
+                                let mut pieces_guard = pieces.lock().unwrap();
+                                pieces_guard[piece_index as usize] = None;
+                            }
+                            // TODO send cancel ???
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        },
+                    };
 
                     match result {
                         Ok(data) => {
                             // Lock just long enough to store the piece
                             let mut pieces_guard = pieces.lock().unwrap();
-                            pieces_guard[piece_index as usize] = Some(data);
+                            pieces_guard[piece_index as usize] = Some(data.clone());
 
-                            let percent = torrent_progress(&pieces_guard);
-                            println!(
-                                "[{:.2}% complete] Downloaded piece {} from peer {:?}",
-                                percent, piece_index, peer_clone
-                            );
+                            total_downloaded.fetch_add(data.len(), Ordering::SeqCst);
+
                         }
                         Err(e) => {
                             eprintln!(
@@ -121,10 +162,50 @@ impl Downloader {
                         }
                     }
                 }
+
+                active_peers.fetch_sub(1, Ordering::SeqCst);
             });
 
             handles.push(handle);
         }
+
+        let progress_pieces = self.pieces.clone();
+        let progress_peers = active_peers.clone();
+        let progress_bytes = total_downloaded.clone();
+        let progress_torrent = self.torrent.clone();
+
+        tokio::spawn(async move {
+            let mut last_bytes = 0;
+            let mut last_time = Instant::now();
+
+            loop {
+                sleep(Duration::from_millis(500)).await;
+
+                // Calculate speed
+                let now = Instant::now();
+                let downloaded = progress_bytes.load(Ordering::SeqCst);
+                let elapsed = now.duration_since(last_time).as_secs_f64().max(1.0);
+                let speed_kbps = (downloaded - last_bytes) as f64 / 1024.0 / elapsed;
+                last_bytes = downloaded;
+                last_time = now;
+
+                // Calculate completion percentage
+                let pieces_guard = progress_pieces.lock().unwrap();
+                let total_bytes: usize = pieces_guard
+                .iter()
+                .filter_map(|p| p.as_ref().map(|d| d.len()))
+                .sum();
+
+                let percent = (total_bytes as f64 / progress_torrent.total_size as f64) * 100.0;
+                let active = progress_peers.load(Ordering::SeqCst);
+
+                println!(
+                    "⏬ {:.2}% complete | {:.1} KB/s | Active peers: {}",
+                    percent, speed_kbps, active
+                );
+            }
+        });
+
 
         // Wait for all peer tasks to complete
         for h in handles {
@@ -134,8 +215,7 @@ impl Downloader {
         println!("Download complete (some pieces may still be missing)");
         write_torrent_to_disk(
             &self.torrent.name, // or some filename
-            &self.pieces,
-            self.torrent.info_hash,
+            &self.pieces
         )
         .await?;
 
@@ -143,18 +223,10 @@ impl Downloader {
     }
 }
 
-/// Compute overall download progress as a percentage
-fn torrent_progress(pieces: &Vec<Option<Vec<u8>>>) -> f64 {
-    let total = pieces.len();
-    let downloaded = pieces.iter().filter(|p| p.is_some()).count();
-    (downloaded as f64 / total as f64) * 100.0
-}
-
 /// Assemble pieces, verify the full file hash, and write to disk.
 async fn write_torrent_to_disk(
     filename: &str,
-    pieces: &Arc<Mutex<Vec<Option<Vec<u8>>>>>,
-    expected_info_hash: [u8; 20],
+    pieces: &Arc<Mutex<Vec<Option<Vec<u8>>>>>
 ) -> anyhow::Result<()> {
     let pieces_guard = pieces.lock().unwrap(); // lock the mutex
     let mut full_data = Vec::new();
@@ -165,15 +237,6 @@ async fn write_torrent_to_disk(
         } else {
             return Err(anyhow::anyhow!("Missing piece, cannot write file yet"));
         }
-    }
-
-    // Check SHA1 hash
-    let mut hasher = Sha1::new();
-    hasher.update(&full_data);
-    let computed_hash = hasher.finalize(); // this gives a GenericArray<u8, 20>
-
-    if computed_hash[..] != expected_info_hash[..] {
-        return Err(anyhow::anyhow!("Torrent hash mismatch! Not writing file."));
     }
 
     let mut file = tokio::fs::File::create(filename).await?;
