@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::fmt;
+
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -9,6 +12,28 @@ pub enum TrackerError {
     HttpClient(reqwest::Error),
     BencodeDecode(serde_bencode::Error),
     PeerParse(std::io::Error),
+}
+
+impl fmt::Display for TrackerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TrackerError::HttpClient(e) => {
+                write!(f, "Http client error while contacting tracker: {}", e)
+            }
+            TrackerError::BencodeDecode(e) => write!(f, "Failed to decode tracker response: {}", e),
+            TrackerError::PeerParse(e) => write!(f, "Failed to parse peer list: {}", e),
+        }
+    }
+}
+
+impl Error for TrackerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            TrackerError::HttpClient(e) => Some(e),
+            TrackerError::BencodeDecode(e) => Some(e),
+            TrackerError::PeerParse(e) => Some(e),
+        }
+    }
 }
 
 impl From<reqwest::Error> for TrackerError {
@@ -117,14 +142,14 @@ mod tests {
         let announce_url = "http://bttracker.debian.org:6969/announce".to_string();
 
         let info_hash_bytes: [u8; 20] = hex::decode(info_hash_hex)
-        .unwrap()
-        .try_into()
-        .expect("Hex hash must be 20 bytes long");
+            .unwrap()
+            .try_into()
+            .expect("Hex hash must be 20 bytes long");
 
         let peer_id_bytes: [u8; 20] = hex::decode(peer_id_hex)
-        .unwrap()
-        .try_into()
-        .expect("Hex peer ID must be 20 bytes long");
+            .unwrap()
+            .try_into()
+            .expect("Hex peer ID must be 20 bytes long");
 
         let mock_torrent = crate::torrent::VerifiedTorrent {
             announce: announce_url,

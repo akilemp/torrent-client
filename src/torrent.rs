@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use std::fs;
+use std::error::Error;
 use std::path::Path;
+use std::{fmt, fs};
 
 const SHA1_SIZE: usize = 20;
 
@@ -10,6 +11,28 @@ pub enum BencodeTorrentError {
     Io(std::io::Error),
     Parsing(serde_bencode::Error),
     InvalidMetadata(String),
+}
+
+impl fmt::Display for BencodeTorrentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BencodeTorrentError::Io(e) => write!(f, "I/O error while reading torrent file: {}", e),
+            BencodeTorrentError::Parsing(e) => write!(f, "Failed to parse bencoded data: {}", e),
+            BencodeTorrentError::InvalidMetadata(msg) => {
+                write!(f, "Invalid torrent metadata: {}", msg)
+            }
+        }
+    }
+}
+
+impl Error for BencodeTorrentError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            BencodeTorrentError::Io(e) => Some(e),
+            BencodeTorrentError::Parsing(e) => Some(e),
+            BencodeTorrentError::InvalidMetadata(_) => None,
+        }
+    }
 }
 
 impl From<std::io::Error> for BencodeTorrentError {
@@ -118,6 +141,7 @@ struct BencodeTorrent {
     _created_by: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct VerifiedTorrent {
     pub announce: String,
     pub info_hash: [u8; SHA1_SIZE],

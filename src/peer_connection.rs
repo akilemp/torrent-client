@@ -1,37 +1,75 @@
 #![allow(dead_code)]
 
+use std::error::Error;
+use std::fmt;
 use std::net::SocketAddr;
 
-use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
+use tokio::time::error::Elapsed;
+use tokio::time::{Duration, timeout};
 
 use crate::bitfield::Bitfield;
 use crate::handshake::{HANDSHAKE_LEN, Handshake, HandshakeError};
+use crate::message::{Message, MessageError, MessageId};
 use crate::piece_proggress::PieceProgress;
 use crate::torrent::VerifiedTorrent;
-use crate::message::{Message, MessageId, MessageError};
-
 
 #[derive(Debug)]
-pub enum DownloadError {
+pub enum ConnectionError {
     PieceNotAvailable,
     PeerChoked,
     InvalidHash,
     Io(std::io::Error),
     Protocol(String),
     Message(MessageError),
+    Handshake(HandshakeError),
 }
 
-
-impl From<std::io::Error> for DownloadError {
-    fn from(e: std::io::Error) -> Self {
-        DownloadError::Io(e)
+impl fmt::Display for ConnectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnectionError::PieceNotAvailable => write!(f, "Piece not available from peer"),
+            ConnectionError::PeerChoked => write!(f, "Peer is choked"),
+            ConnectionError::InvalidHash => write!(f, "Invalid piece hash"),
+            ConnectionError::Io(e) => write!(f, "I/O error: {}", e),
+            ConnectionError::Protocol(msg) => write!(f, "Protocol error: {}", msg),
+            ConnectionError::Message(e) => write!(f, "Message error: {}", e),
+            ConnectionError::Handshake(e) => write!(f, "Handshake error: {}", e),
+        }
     }
 }
-impl From<MessageError> for DownloadError {
+
+// --- Implement std::error::Error for integration with anyhow, ? etc. ---
+impl Error for ConnectionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ConnectionError::Io(e) => Some(e),
+            ConnectionError::Message(e) => Some(e),
+            ConnectionError::Handshake(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ConnectionError {
+    fn from(e: std::io::Error) -> Self {
+        ConnectionError::Io(e)
+    }
+}
+impl From<MessageError> for ConnectionError {
     fn from(e: MessageError) -> Self {
-        DownloadError::Message(e)
+        ConnectionError::Message(e)
+    }
+}
+impl From<HandshakeError> for ConnectionError {
+    fn from(e: HandshakeError) -> Self {
+        ConnectionError::Handshake(e)
+    }
+}
+impl From<Elapsed> for ConnectionError {
+    fn from(_e: Elapsed) -> Self {
+        ConnectionError::Protocol("Timeout".into())
     }
 }
 
@@ -80,74 +118,148 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         peer: &crate::peer::Peer,
         info_hash: [u8; 20],
         client_peer_id: [u8; 20],
-    ) -> Result<PeerConnection<TcpStream>, HandshakeError> {
+    ) -> Result<PeerConnection<TcpStream>, ConnectionError> {
         let addr: SocketAddr = std::net::SocketAddr::V4(peer.socket_addr());
         println!("      Connecting to peer: {}", addr);
 
         // Equivalent to connect_timeout
         let stream = timeout(Duration::from_secs(3), TcpStream::connect(addr))
-        .await
-        .map_err(|_| HandshakeError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "connection timeout",
-        )))??;
+            .await
+            .map_err(|_| {
+                ConnectionError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "connection timeout",
+                ))
+            })??;
 
+        let (stream, _incoming_handshake) =
+            Self::perform_handshake(stream, info_hash, client_peer_id).await?;
+
+        let mut conn = PeerConnection::new(stream);
+
+        conn.write_message(&Message::interested()).await?;
+        conn.write_message(&Message { id: Some(MessageId::Unchoke), payload: vec![] }).await?;
+
+        Ok(conn)
+    }
+
+    /// Perform the BitTorrent handshake with the given peer.
+    ///
+    /// Sends our handshake, reads the peer's handshake, and validates it.
+    async fn perform_handshake(
+        mut stream: TcpStream,
+        info_hash: [u8; 20],
+        client_peer_id: [u8; 20],
+    ) -> Result<(TcpStream, Handshake), HandshakeError> {
         let outgoing_handshake = Handshake::new(info_hash, client_peer_id);
         let out_bytes = outgoing_handshake.to_bytes();
 
+        // Ensure stream is ready for writing
         stream.writable().await?;
-        stream.try_write(&out_bytes)?;
+        stream.write_all(&out_bytes).await?;
 
+        // Read peer's handshake
         let mut response_buffer = [0u8; HANDSHAKE_LEN];
-        let mut owned_stream = stream;
-        owned_stream.read_exact(&mut response_buffer).await?;
+        stream.read_exact(&mut response_buffer).await?;
 
-        let _incoming_handshake = Handshake::from_bytes(response_buffer, info_hash)?;
+        // Parse and validate
+        let incoming_handshake = Handshake::from_bytes(response_buffer, info_hash)?;
 
-        Ok(PeerConnection {
-            stream: owned_stream,
-            is_choked: true,
-            bitfield: None,
-        })
+        Ok((stream, incoming_handshake))
+    }
+
+    /// Waits until a Bitfield message is received, ignoring other messages.
+    /// Returns an error if the connection ends or an unexpected condition occurs.
+    pub async fn wait_for_bitfield(&mut self) -> Result<Bitfield, ConnectionError> {
+        match timeout(Duration::from_secs(5), self.wait_for_bitfield_inner()).await? {
+            Ok(result) => Ok(result),
+            Err(_) => Err(ConnectionError::Protocol(
+                "Timed out waiting for Bitfield".into(),
+            )),
+        }
+    }
+
+    async fn wait_for_bitfield_inner(&mut self) -> Result<Bitfield, ConnectionError> {
+        loop {
+            let msg = self.read_message().await?;
+
+            match msg.id {
+                Some(MessageId::Bitfield) => {
+                    return Ok(Bitfield::from_bytes(msg.payload));
+                }
+                Some(MessageId::Unchoke) => {
+                    self.is_choked = false;
+                    continue;
+                }
+                Some(MessageId::Choke) => {
+                    self.is_choked = true;
+                    continue;
+                }
+                Some(other) => {
+                    eprintln!("Ignoring message {:?} while waiting for Bitfield", other);
+                    continue;
+                }
+                None => {
+                    eprintln!("Peer sent keep-alive while waiting for Bitfield");
+                    continue;
+                }
+            }
+        }
     }
 
     pub async fn download_piece(
         &mut self,
         torrent: &VerifiedTorrent,
-        peer_bitfield: &Bitfield, // TODO use self.bitfield
         piece_index: u32,
-    ) -> Result<Vec<u8>, DownloadError> {
-        if !peer_bitfield.has_piece(piece_index as usize) {
-            return Err(DownloadError::PieceNotAvailable);
+    ) -> Result<Vec<u8>, ConnectionError> {
+        let bitfield = match &self.bitfield {
+            Some(bf) => bf,
+            None => return Err(ConnectionError::Protocol("No bitfield".into())),
+        };
+
+        if !bitfield.has_piece(piece_index as usize) {
+            return Err(ConnectionError::PieceNotAvailable);
         }
 
-        // Step 1. Send 'interested' and wait for unchoke
-        self.write_message(&Message::interested()).await?;
-        self.wait_for_unchoke().await?;
 
         // Step 2. Download piece blocks
         let piece_len = torrent.piece_length(piece_index as usize);
         let mut progress = PieceProgress::new(piece_index, piece_len);
 
         while !progress.is_complete() {
+            if self.is_choked {
+                self.wait_for_unchoke().await?;
+            }
+
             for (offset, length) in progress.next_requests(PieceProgress::MAX_PIPELINE) {
                 let req = Message::request(piece_index, offset, length);
                 self.write_message(&req).await?;
             }
 
             let msg = self.read_message().await?;
-            if let Some(MessageId::Piece) = msg.id {
-                let (index, begin, block) = Message::parse_piece_payload(&msg.payload)?;
-                if index == piece_index {
-                    progress.mark_block(begin as usize, &block);
-                }
+            match msg.id {
+                Some(MessageId::Piece) => {
+                    let (index, begin, block) = Message::parse_piece_payload(&msg.payload)?;
+                    if index == piece_index {
+                        progress.mark_block(begin as usize, &block);
+                    }
+                },
+                Some(MessageId::Choke) => {
+                    self.is_choked = true;
+                },
+                Some(MessageId::Unchoke) => {
+                    self.is_choked = false;
+                },
+                Some(_other) => return Err(ConnectionError::Protocol("Didnt get a piece".into()))
+                ,
+                None => continue,
             }
         }
 
         // Step 3. Verify hash
-        let expecter_hash = torrent.piece_hashes[piece_index as usize];
-        if !progress.verify(&expecter_hash) {
-            return Err(DownloadError::InvalidHash);
+        let expected_hash = torrent.piece_hashes[piece_index as usize];
+        if !progress.verify(&expected_hash) {
+            return Err(ConnectionError::InvalidHash);
         }
 
         // Step 4. Notify peer we have the piece
@@ -155,12 +267,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         Ok(progress.data)
     }
 
-    async fn wait_for_unchoke(&mut self) -> Result<(), DownloadError> {
+    async fn wait_for_unchoke(&mut self) -> Result<(), ConnectionError> {
         loop {
             let msg = self.read_message().await?;
             match msg.id {
-                Some(MessageId::Unchoke) => return Ok(()),
-                Some(MessageId::Choke) => return Err(DownloadError::PeerChoked),
+                Some(MessageId::Unchoke) => {
+                    self.is_choked = false;
+                    return Ok(());
+                }
                 _ => continue,
             }
         }
@@ -170,14 +284,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{self, AsyncReadExt, AsyncWriteExt, duplex, DuplexStream};
     use crate::{
-        message::{Message, MessageId},
         bitfield::Bitfield,
+        message::{Message, MessageId},
         piece_proggress::PieceProgress,
         torrent::VerifiedTorrent,
     };
     use sha1::{Digest, Sha1};
+    use tokio::io::{self, AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
     fn make_bitfield_message() -> Vec<u8> {
         let payload = vec![0b_1010_1010, 0b_1100_0000];
@@ -264,7 +378,6 @@ mod tests {
         assert_eq!(buf, vec![0, 0, 0, 0]);
     }
 
-
     #[tokio::test]
     async fn test_download_piece_successful() {
         // Create a duplex stream (like a virtual TCP connection)
@@ -273,7 +386,11 @@ mod tests {
         // ========== Simulated Peer Behavior (Server Side Task) ==========
         tokio::spawn(async move {
             // 1️⃣ Respond with an UNCHOKE
-            let unchoke = Message{id: Some(MessageId::Unchoke), payload: vec![]}.to_bytes();
+            let unchoke = Message {
+                id: Some(MessageId::Unchoke),
+                payload: vec![],
+            }
+            .to_bytes();
             server_side.write_all(&unchoke).await.unwrap();
 
             // 2️⃣ Wait for INTERESTED and REQUESTs
@@ -289,7 +406,11 @@ mod tests {
             payload.extend_from_slice(&piece_index.to_be_bytes());
             payload.extend_from_slice(&begin.to_be_bytes());
             payload.extend_from_slice(&block_data);
-            let piece_msg = Message{id: Some(MessageId::Piece), payload: payload}.to_bytes();
+            let piece_msg = Message {
+                id: Some(MessageId::Piece),
+                payload: payload,
+            }
+            .to_bytes();
             server_side.write_all(&piece_msg).await.unwrap();
 
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -316,9 +437,10 @@ mod tests {
 
         // Create a PeerConnection over the client side
         let mut conn = PeerConnection::new(client_side);
+        conn.bitfield = Some(bitfield);
 
         // Call download_piece()
-        let result = conn.download_piece(&torrent, &bitfield, 0).await;
+        let result = conn.download_piece(&torrent, 0).await;
 
         // Verify results
         assert!(result.is_ok(), "download_piece failed: {:?}", result);

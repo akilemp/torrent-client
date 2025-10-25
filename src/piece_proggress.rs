@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_new_initial_state() {
-        let progress = PieceProgress::new(0, 32 * 1024, PieceProgress::BLOCK_SIZE);
+        let progress = PieceProgress::new(0, 32 * 1024);
         assert_eq!(progress.index, 0);
         assert_eq!(progress.total_length, 32 * 1024);
         assert_eq!(progress.received, 0);
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_mark_block_updates_state() {
-        let mut progress = PieceProgress::new(0, 32 * 1024, PieceProgress::BLOCK_SIZE);
+        let mut progress = PieceProgress::new(0, 32 * 1024);
 
         let block_data = vec![1u8; PieceProgress::BLOCK_SIZE];
         progress.mark_block(0, &block_data);
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_next_requests_does_not_repeat() {
-        let mut progress = PieceProgress::new(0, 64 * 1024, PieceProgress::BLOCK_SIZE);
+        let mut progress = PieceProgress::new(0, 64 * 1024);
 
         let requests = progress.next_requests(2);
         assert_eq!(requests.len(), 2);
@@ -113,8 +113,7 @@ mod tests {
 
     #[test]
     fn test_is_complete() {
-        let mut progress =
-            PieceProgress::new(0, 2 * PieceProgress::BLOCK_SIZE, PieceProgress::BLOCK_SIZE);
+        let mut progress = PieceProgress::new(0, 2 * PieceProgress::BLOCK_SIZE);
         let block_data = vec![0xFF; PieceProgress::BLOCK_SIZE];
 
         progress.mark_block(0, &block_data);

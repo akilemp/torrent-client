@@ -146,7 +146,10 @@ impl Message {
     }
 
     pub fn keep_alive() -> Message {
-        Message { id: None, payload: vec![] }
+        Message {
+            id: None,
+            payload: vec![],
+        }
     }
 
     pub fn request(index: u32, begin: u32, length: u32) -> Message {
@@ -161,10 +164,13 @@ impl Message {
         }
     }
 
-    pub fn have(piece_index: u32) ->Message {
+    pub fn have(piece_index: u32) -> Message {
         let id = MessageId::Have;
         let payload = piece_index.to_be_bytes().to_vec();
-        Message { id: Some(id), payload: payload }
+        Message {
+            id: Some(id),
+            payload: payload,
+        }
     }
 
     pub fn parse_piece_payload(payload: &[u8]) -> Result<(u32, u32, Vec<u8>), MessageError> {

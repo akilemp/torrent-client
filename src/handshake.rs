@@ -1,4 +1,5 @@
 use std::{
+    error::Error,
     fmt,
     io::{self, Cursor, Read, Write},
 };
@@ -71,6 +72,15 @@ impl fmt::Display for HandshakeError {
             HandshakeError::InfoHashMismatch => {
                 write!(f, "Peer's info_hash does not match the torrent's info_hash")
             }
+        }
+    }
+}
+
+impl Error for HandshakeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            HandshakeError::Io(e) => Some(e),
+            _ => None,
         }
     }
 }

@@ -1,110 +1,119 @@
 #![allow(dead_code)]
 
 #[derive(Debug)]
-pub enum BitfieldError {
-    InvalidLength,
-}
-
-#[derive(Debug)]
 pub struct Bitfield {
-    bits: Vec<u8>,
-    piece_count: usize,
+    bytes: Vec<u8>,
 }
 
 impl Bitfield {
-    pub fn new(piece_count: usize) -> Self {
-        let byte_count = piece_count.div_ceil(8);
+    /// Creates a new Bitfield with enough bytes to hold `byte_len * 8` bits.
+    pub fn new(byte_len: usize) -> Self {
         Self {
-            bits: vec![0; byte_count],
-            piece_count,
+            bytes: vec![0; byte_len],
         }
     }
 
+    /// Returns true if the bit at `index` is set.
     pub fn has_piece(&self, index: usize) -> bool {
-        if index >= self.piece_count {
-            return false;
-        }
-
         let byte_index = index / 8;
         let bit_index = 7 - (index % 8);
-        (self.bits[byte_index] >> bit_index) & 1 == 1
+        self.bytes
+            .get(byte_index)
+            .map(|b| (b >> bit_index) & 1 == 1)
+            .unwrap_or(false)
     }
 
+    /// Sets the bit at `index` to 1.
     pub fn set_piece(&mut self, index: usize) {
-        if index >= self.piece_count {
-            return;
-        }
-
         let byte_index = index / 8;
         let bit_index = 7 - (index % 8);
-        self.bits[byte_index] |= 1 << bit_index;
-    }
-
-    pub fn from_bytes(data: Vec<u8>, piece_count: usize) -> Result<Self, BitfieldError> {
-        let expect_len = piece_count.div_ceil(8);
-        if data.len() != expect_len {
-            return Err(BitfieldError::InvalidLength);
+        if let Some(byte) = self.bytes.get_mut(byte_index) {
+            *byte |= 1 << bit_index;
         }
-
-        Ok(Self {
-            bits: data,
-            piece_count,
-        })
     }
 
+    /// Construct a Bitfield from raw bytes.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Return the underlying bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.bits.clone()
+        self.bytes.clone()
+    }
+
+    /// Returns an iterator over `(index, has_piece)` for all bits.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, bool)> + '_ {
+        let piece_count = self.bytes.len() * 8;
+        (0..piece_count).map(move |i| (i, self.has_piece(i)))
+    }
+
+    /// Returns an iterator over indices of set bits only.
+    pub fn iter_set(&self) -> impl Iterator<Item = usize> + '_ {
+        self.iter()
+            .filter_map(|(i, has)| if has { Some(i) } else { None })
     }
 }
 
 // --- Tests ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn new_bitfield_all_empty() {
-        let bitfield = Bitfield::new(10); // 10 pieces
-        for i in 0..10 {
+        let bitfield = Bitfield::new(2); // 16 bits
+        for i in 0..16 {
             assert!(!bitfield.has_piece(i));
         }
     }
 
     #[test]
-    fn set_correct_bits() {
-        let mut bf = Bitfield::new(16);
-
-        bf.set_piece(0);
-        assert_eq!(bf.bits.clone(), vec![0b1000_0000, 0b0000_0000]);
-        bf.set_piece(2);
-        assert_eq!(bf.bits.clone(), vec![0b1010_0000, 0b0000_0000]);
-        bf.set_piece(7);
-        assert_eq!(bf.bits.clone(), vec![0b1010_0001, 0b0000_0000]);
-        bf.set_piece(10);
-        assert_eq!(bf.bits.clone(), vec![0b1010_0001, 0b0010_0000]);
-    }
-
-    #[test]
     fn set_and_check_piece() {
-        let mut bitfield = Bitfield::new(10);
-        bitfield.set_piece(3);
+        let mut bf = Bitfield::new(2);
+        bf.set_piece(3);
+        bf.set_piece(10);
 
-        assert!(bitfield.has_piece(3));
-        assert!(!bitfield.has_piece(2));
-        assert!(!bitfield.has_piece(4));
+        assert!(bf.has_piece(3));
+        assert!(!bf.has_piece(2));
+        assert!(bf.has_piece(10));
     }
 
     #[test]
-    fn from_raw_bytes_and_to_bytes() {
-        let raw = vec![0b1010_0000]; // Only 4 bits relevant
-        let bf = Bitfield::from_bytes(raw.clone(), 4).unwrap();
+    fn from_bytes_and_to_bytes() {
+        let raw = vec![0b1010_0000];
+        let bf = Bitfield::from_bytes(raw.clone());
 
         assert!(bf.has_piece(0));
         assert!(!bf.has_piece(1));
         assert!(bf.has_piece(2));
         assert!(!bf.has_piece(3));
-
         assert_eq!(bf.to_bytes(), raw);
+    }
+
+    #[test]
+    fn iter_and_iter_set() {
+        let mut bf = Bitfield::new(1);
+        bf.set_piece(0);
+        bf.set_piece(3);
+        bf.set_piece(7);
+
+        let all: Vec<_> = bf.iter().collect();
+        assert_eq!(
+            all,
+            vec![
+                (0, true),
+                (1, false),
+                (2, false),
+                (3, true),
+                (4, false),
+                (5, false),
+                (6, false),
+                (7, true)
+            ]
+        );
+
+        let set_indices: Vec<_> = bf.iter_set().collect();
+        assert_eq!(set_indices, vec![0, 3, 7]);
     }
 }
