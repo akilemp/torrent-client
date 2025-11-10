@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 
 use tokio::io::AsyncWriteExt;
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{Instant, sleep, timeout};
 
 use crate::message::Message;
 use crate::peer::Peer;
@@ -36,7 +36,6 @@ impl Downloader {
         let total_downloaded = Arc::new(AtomicUsize::new(0));
 
         for peer in &self.peers {
-
             let active_peers = active_peers.clone();
             let total_downloaded = total_downloaded.clone();
             let peer_clone = peer.clone();
@@ -46,7 +45,7 @@ impl Downloader {
             let handle = tokio::spawn(async move {
                 active_peers.fetch_add(1, Ordering::SeqCst);
 
-                // 1️⃣ Connect to peer
+                // Connect to peer
                 let mut conn = match PeerConnection::<TcpStream>::connect(
                     &peer_clone,
                     torrent.info_hash,
@@ -62,7 +61,7 @@ impl Downloader {
                     }
                 };
 
-                // 2️⃣ Wait for bitfield
+                // Wait for bitfield
                 match conn.wait_for_bitfield().await {
                     Ok(bitfield) => conn.bitfield = Some(bitfield),
                     Err(e) => {
@@ -72,12 +71,13 @@ impl Downloader {
                     }
                 };
 
-
-
-                // 3️⃣ Download pieces this peer has
+                // Download pieces this peer has
                 loop {
                     if total_downloaded.load(Ordering::SeqCst) >= torrent.total_size as usize {
-                        println!("✅ Torrent fully downloaded — closing peer {:?}", peer_clone);
+                        println!(
+                            "✅ Torrent fully downloaded — closing peer {:?}",
+                            peer_clone
+                        );
                         break;
                     }
 
@@ -89,13 +89,13 @@ impl Downloader {
                             if let Some((i, _)) = peer_bitfield
                                 .iter()
                                 .find(|(i, has_piece)| *has_piece && pieces_guard[*i].is_none())
-                                {
-                                    // Mark as in-progress to reserve it for this peer
-                                    pieces_guard[i] = Some(Vec::new());
-                                    Some(i as u32)
-                                } else {
-                                    None
-                                }
+                            {
+                                // Mark as in-progress to reserve it for this peer
+                                pieces_guard[i] = Some(Vec::new());
+                                Some(i as u32)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -118,7 +118,8 @@ impl Downloader {
                     // Download piece
                     // Limit how long we’ll wait for one piece (e.g. 60 seconds)
                     let download_timeout = Duration::from_secs(30);
-                    let result = timeout(download_timeout, conn.download_piece(&torrent, piece_index)).await;
+                    let result =
+                        timeout(download_timeout, conn.download_piece(&torrent, piece_index)).await;
 
                     let result = match result {
                         Ok(r) => r,
@@ -134,7 +135,7 @@ impl Downloader {
                             // TODO send cancel ???
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             continue;
-                        },
+                        }
                     };
 
                     match result {
@@ -144,7 +145,6 @@ impl Downloader {
                             pieces_guard[piece_index as usize] = Some(data.clone());
 
                             total_downloaded.fetch_add(data.len(), Ordering::SeqCst);
-
                         }
                         Err(e) => {
                             eprintln!(
@@ -192,9 +192,9 @@ impl Downloader {
                 // Calculate completion percentage
                 let pieces_guard = progress_pieces.lock().unwrap();
                 let total_bytes: usize = pieces_guard
-                .iter()
-                .filter_map(|p| p.as_ref().map(|d| d.len()))
-                .sum();
+                    .iter()
+                    .filter_map(|p| p.as_ref().map(|d| d.len()))
+                    .sum();
 
                 let percent = (total_bytes as f64 / progress_torrent.total_size as f64) * 100.0;
                 let active = progress_peers.load(Ordering::SeqCst);
@@ -206,7 +206,6 @@ impl Downloader {
             }
         });
 
-
         // Wait for all peer tasks to complete
         for h in handles {
             let _ = h.await;
@@ -215,7 +214,7 @@ impl Downloader {
         println!("Download complete (some pieces may still be missing)");
         write_torrent_to_disk(
             &self.torrent.name, // or some filename
-            &self.pieces
+            &self.pieces,
         )
         .await?;
 
@@ -226,7 +225,7 @@ impl Downloader {
 /// Assemble pieces, verify the full file hash, and write to disk.
 async fn write_torrent_to_disk(
     filename: &str,
-    pieces: &Arc<Mutex<Vec<Option<Vec<u8>>>>>
+    pieces: &Arc<Mutex<Vec<Option<Vec<u8>>>>>,
 ) -> anyhow::Result<()> {
     let pieces_guard = pieces.lock().unwrap(); // lock the mutex
     let mut full_data = Vec::new();

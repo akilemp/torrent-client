@@ -387,7 +387,7 @@ mod tests {
 
         // ========== Simulated Peer Behavior (Server Side Task) ==========
         tokio::spawn(async move {
-            // 1️⃣ Respond with an UNCHOKE
+            // Respond with an UNCHOKE
             let unchoke = Message {
                 id: Some(MessageId::Unchoke),
                 payload: vec![],
@@ -395,12 +395,12 @@ mod tests {
             .to_bytes();
             server_side.write_all(&unchoke).await.unwrap();
 
-            // 2️⃣ Wait for INTERESTED and REQUESTs
+            // Wait for INTERESTED and REQUESTs
             let mut buf = [0u8; 1024];
             let _n = server_side.read(&mut buf).await.unwrap();
             // (We’re not parsing here, just consuming bytes)
 
-            // 3️⃣ Send back a PIECE message
+            // Send back a PIECE message
             let piece_index: u32 = 0;
             let begin: u32 = 0;
             let block_data = vec![1u8; PieceProgress::BLOCK_SIZE];
