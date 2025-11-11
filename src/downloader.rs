@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +34,7 @@ impl Downloader {
         let mut handles = Vec::new();
         let active_peers = Arc::new(AtomicUsize::new(0));
         let total_downloaded = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicBool::new(false));
 
         for peer in &self.peers {
             let active_peers = active_peers.clone();
@@ -41,6 +42,7 @@ impl Downloader {
             let peer_clone = peer.clone();
             let torrent = self.torrent.clone();
             let pieces = self.pieces.clone();
+            let done = done.clone();
 
             let handle = tokio::spawn(async move {
                 active_peers.fetch_add(1, Ordering::SeqCst);
@@ -73,12 +75,19 @@ impl Downloader {
 
                 // Download pieces this peer has
                 loop {
-                    if total_downloaded.load(Ordering::SeqCst) >= torrent.total_size as usize {
+                    // Exit if someone set the done flag
+                    if done.load(Ordering::SeqCst) {
                         println!(
                             "✅ Torrent fully downloaded — closing peer {:?}",
                             peer_clone
                         );
+                        active_peers.fetch_sub(1, Ordering::SeqCst);
                         break;
+                    }
+
+                    if total_downloaded.load(Ordering::SeqCst) >= torrent.total_size as usize {
+                        done.store(true, Ordering::SeqCst);
+                        continue;
                     }
 
                     let piece_index = {
@@ -104,13 +113,13 @@ impl Downloader {
                     let piece_index = match piece_index {
                         Some(idx) => idx,
                         None => {
-                            // No work — send keep-alive to prevent timeout
+                            // No work at the moment — send keep-alive to prevent timeout
                             if let Err(e) = conn.write_message(&Message::keep_alive()).await {
                                 eprintln!("Failed to send keep-alive to {:?}: {:?}", peer_clone, e);
                                 break; // Connection probably closed
                             }
 
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                             continue;
                         }
                     };
@@ -133,7 +142,7 @@ impl Downloader {
                                 pieces_guard[piece_index as usize] = None;
                             }
                             // TODO send cancel ???
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                             continue;
                         }
                     };
@@ -169,6 +178,20 @@ impl Downloader {
             handles.push(handle);
         }
 
+        self.log_proggress(active_peers, total_downloaded);
+
+        // Wait for all peer tasks to complete
+        for h in handles {
+            let _ = h.await;
+        }
+
+        println!("Download complete (some pieces may still be missing)");
+        write_torrent_to_disk(&self.torrent.name, &self.pieces).await?;
+
+        Ok(())
+    }
+
+    fn log_proggress(&self, active_peers: Arc<AtomicUsize>, total_downloaded: Arc<AtomicUsize>) {
         let progress_pieces = self.pieces.clone();
         let progress_peers = active_peers.clone();
         let progress_bytes = total_downloaded.clone();
@@ -205,20 +228,6 @@ impl Downloader {
                 );
             }
         });
-
-        // Wait for all peer tasks to complete
-        for h in handles {
-            let _ = h.await;
-        }
-
-        println!("Download complete (some pieces may still be missing)");
-        write_torrent_to_disk(
-            &self.torrent.name, // or some filename
-            &self.pieces,
-        )
-        .await?;
-
-        Ok(())
     }
 }
 
