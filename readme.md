@@ -1,42 +1,48 @@
-torrent-client
+# torrent-client
 
-Overview
+## Overview
 
-A simple, BitTorrent client written entirely in Rust. This project is a foundational, leech-only implementation that is inspired by jse.li's blog post 'Writing a BitTorrent Client', and is based on BitTorrent Specification (BEP 3). It is built primarily for educational purposes to understand the core protocol.
+A simple, command-line BitTorrent client written entirely in **Rust**. This project is a foundational, **leech-only** implementation that is **inspired by** jse.li's blog post 'Writing a BitTorrent Client', and is **based on** the official **BitTorrent Specification (BEP 3)**. It is built primarily for educational purposes **to understand the core protocol**.
 
-Features / Limitations
+---
 
-* Built in Rust.
+## Features / Limitations
 
-* Tracker only Support: Connects to HTTP/UDP trackers to discover peers.
+* Built in **Rust**.
+* **Tracker only Support:** Connects to HTTP/UDP trackers to discover peers.
+* **Downloads:** Downloads are verified via SHA-1 hashing before saving.
+* **Leech only:** Focuses only on downloading content, not seeding.
 
-* Downloads: Downloads are verified via SHA-1 hashing before saving.
+---
 
-* Leech only: Focuses only on downloading content, not seeding.
+## Getting Started
 
-Getting Started
+### Prerequisites
 
-Prerequisites
+You must have **Rust** and **Cargo** (Rust's package manager) installed.
 
-You must have Rust and Cargo (Rust's package manager) installed.
+### Build and Run
 
-Build and Run
+1.  **Clone the repository:**
 
-1. Clone the repository:
+    ```bash
+    git clone [https://github.com/](https://github.com/)[GITHUB_USERNAME]/torrent-client.git
+    cd torrent-client
+    ```
 
-git clone https://github.com/[GITHUB_USERNAME]/torrent-client.git
-cd torrent-client
+2.  **Compile the binary:**
 
+    ```bash
+    cargo build --release
+    ```
 
-2. Compile the binary:
+    The executable, `torrent-client`, is now available in the `target/release/` directory.
 
-cargo build --release
+---
 
+## Usage
 
-The executable, torrent-client, is now available in the target/release/ directory.
+To start a download, run the client from your command line and pass the path to any `.torrent` file:
 
-Usage
-
-To start a download, run the client from your command line:
-
-./target/release/torrent-client
+```bash
+./target/release/torrent-client /path/to/your_file.torrent
